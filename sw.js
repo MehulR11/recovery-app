@@ -1,6 +1,6 @@
 /* Service worker: lets the app install and open quickly. Data always comes live from the backend. */
-const CACHE = 'recovery-v1';
-const SHELL = ['./', 'index.html', 'styles.css?v=1', 'config.js?v=1', 'app.js?v=1', 'manifest.webmanifest',
+const CACHE = 'recovery-v2';
+const SHELL = ['./', 'index.html', 'styles.css?v=2', 'config.js?v=1', 'app.js?v=2', 'manifest.webmanifest',
   'assets/gst-mark-light.png', 'assets/gst-mark.png', 'assets/gst-lockup-tagline.png', 'assets/icon-192.png', 'assets/favicon-48.png'];
 
 self.addEventListener('install', (e) => {

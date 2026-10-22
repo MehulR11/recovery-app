@@ -32,11 +32,20 @@
     if (a >= 1e5) return '₹ ' + (n / 1e5).toFixed(2) + ' L';
     return '₹ ' + nf.format(Math.round(n));
   }
-  function pctText(p) { return isFinite(p) ? Math.round(p * 100) + '%' : '–'; }
+  function pctText(p) {
+    if (!isFinite(p)) return '–';
+    var v = p * 100;
+    return (v > 0 && v < 10 ? (Math.round(v * 10) / 10).toFixed(1) : String(Math.round(v))) + '%';
+  }
   function dmy(iso) { var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '-' + m[2] + '-' + m[1] : (iso || ''); }
   function todayISO() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
   function enc(s) { return encodeURIComponent(s); }
-  function unitName(u) { return 'Unit ' + u; }
+  function fmtExtra(name, v) {
+    if (/\((rs\.?|₹|inr)\)\s*$/i.test(name)) { var n = Number(String(v).replace(/[,₹\s]/g, '')); if (!isNaN(n) && String(v).trim() !== '') return inr(n); }
+    return v;
+  }
+  function unitName(u) { var L = S.config && S.config.unitLabels; return (L && L[u]) || ('Unit ' + u); }
+  function upDays() { return (S.config && S.config.updatedWithinDays) || 7; }
   function isAdmin() { return S.user && S.user.role === 'ADMIN'; }
   function isSTO() { return S.user && S.user.role === 'STO'; }
 
@@ -277,7 +286,7 @@
       el.innerHTML = rows.length ? figuresCard(title, t) :
         '<section class="card raised"><div class="note info">No 90+ day cases for you in ' + esc(s.monthLabel) + ' yet.</div></section>';
       var tl = document.getElementById('tile-r90');
-      if (tl && t.n) tl.textContent = 'Updated this week: ' + t.upd + ' of ' + t.n;
+      if (tl && t.n) tl.textContent = 'Updated (last ' + upDays() + ' days): ' + t.upd + ' of ' + t.n;
     }).catch(function (e) {
       var el = document.getElementById('home-fig');
       if (el) el.innerHTML = '<section class="card raised"><div class="note err">' + esc(e.message) + '</div></section>';
@@ -306,12 +315,12 @@
     var rows = s.rows.filter(function (r) { return r.unit === unit; });
     var t = total(rows, tab, s.targetRate);
     var head = bar({
-      title: '90+ Day Recovery', sub: unitName(unit) + ' · week from ' + s.weekStart, back: '#/home',
-      right: '<button class="iconbtn" data-act="refreshR90" aria-label="Refresh">' + I.refresh + '</button>',
+      title: '90+ Day Recovery', sub: unitName(unit) + ' · ' + s.monthLabel, back: '#/home',
+      right: '<button class="iconbtn" data-act="exportR90" aria-label="Download Excel">' + I.install + '</button><button class="iconbtn" data-act="refreshR90" aria-label="Refresh">' + I.refresh + '</button>',
       seg: seg('unitTab', tab, TABS)
     });
     var adminPick = isAdmin() ? '<div>' + chips('adminUnit', String(unit), S.config.units.map(function (x) { return [String(x), unitName(x)]; }), true) + '</div>' : '';
-    var extra = '<div class="row between small"><span>Updated this week: <b>' + t.upd + ' of ' + t.n + '</b></span><span>Spot visits: <b>' + t.vis + '</b></span></div>';
+    var extra = '<div class="row between small"><span>Updated in last ' + s.updatedWithinDays + ' days: <b>' + t.upd + ' of ' + t.n + '</b></span><span>Spot visits: <b>' + t.vis + '</b></span></div>';
     var stoCards = rows.length ? rows.map(function (r) {
       var x = pick(r, tab), target = x.open * s.targetRate, ach = target > 0 ? x.rec / target : 0, me = u.role === 'STO' && u.charge === r.charge;
       var updFrac = x.n ? x.upd / x.n : 0;
@@ -344,7 +353,7 @@
     return '<div class="section-h"><h2 class="h2">' + esc(title) + '</h2><span class="small">' + list.length + ' of ' + all.length + '</span></div>' +
       '<div class="row" style="background:#fff;border:1px solid var(--field);border-radius:12px;padding:0 12px;min-height:46px">' + I.search +
       '<label class="sr" for="q">Search cases</label><input id="q" class="grow" data-input="search" value="' + esc(S.q) + '" placeholder="Dealer name, GSTIN or reference" style="border:0;outline:none;background:transparent;min-height:44px"></div>' +
-      chips('caseFilter', S.caseFilter, [['all', 'All'], ['due', 'Not updated this week'], ['novisit', 'No spot visit'], ['recovered', 'Recovery made']]) +
+      chips('caseFilter', S.caseFilter, [['all', 'All'], ['due', 'Update due'], ['novisit', 'No spot visit'], ['recovered', 'Recovery made']]) +
       '<div class="card flush list" id="case-list">' + (shown.length ? shown.map(caseItem).join('') : '<div class="empty">No cases match.</div>') + '</div>' +
       (list.length > shown.length ? '<div class="small" style="text-align:center">Showing first 200 – search to narrow down.</div>' : '');
   }
@@ -369,15 +378,14 @@
 
   function drawCase(keep) {
     var d = S.caseData, k = d.kase, last = d.updates[0] || {};
-    var target = Math.round(k.opening * 0.10);
+    var target = Math.round(k.opening * (d.targetRate || 0.1));
     var extraKeys = Object.keys(k.extra || {});
     var info = '<dl class="kv"><dt>GSTIN</dt><dd>' + esc(k.gstin) + '</dd>' +
-      (k.ref ? '<dt>Demand ref</dt><dd>' + esc(k.ref) + '</dd>' : '') +
-      (k.orderDate ? '<dt>Order date</dt><dd>' + esc(dmy(k.orderDate)) + '</dd>' : '') +
+      (k.ref ? '<dt>Demand ID</dt><dd>' + esc(k.ref) + '</dd>' : '') +
+      (k.orderDate ? '<dt>Date of order</dt><dd>' + esc(dmy(k.orderDate)) + '</dd>' : '') +
       '<dt>Charge</dt><dd>' + unitName(k.unit) + ' · ' + esc(k.charge) + '</dd>' +
-      '<dt>Registration</dt><dd>' + (k.status === 'Cancelled' ? '<span class="badge grey">Cancelled</span>' : '<span class="badge ok">Active</span>') + '</dd></dl>' +
-      (extraKeys.length ? '<details class="more"><summary>More details from the list</summary><dl class="kv" style="margin-top:8px">' +
-        extraKeys.map(function (x) { return '<dt>' + esc(x) + '</dt><dd>' + esc(k.extra[x]) + '</dd>'; }).join('') + '</dl></details>' : '');
+      '<dt>Case type</dt><dd>' + (k.status === 'Cancelled' ? '<span class="badge grey">Cancelled</span>' : '<span class="badge ok">Active</span>') + '</dd>' +
+      extraKeys.map(function (x) { return '<dt>' + esc(x) + '</dt><dd>' + esc(fmtExtra(x, k.extra[x])) + '</dd>'; }).join('') + '</dl>';
 
     var forms = '';
     if (d.canEdit) {
@@ -414,27 +422,27 @@
       '<div class="stat ok"><span class="k">Recovered</span><span class="v">' + amt(k.recovered) + '</span></div>' +
       '<div class="stat dark"><span class="k">Pending now</span><span class="v">' + amt(k.pending) + '</span></div></div>' +
       '<div class="row between small"><span>Case target (10%): <b>' + inr(target) + '</b></span><span>' +
-      (k.updatedThisWeek ? '<span class="badge ok">Updated this week</span>' : '<span class="badge warn">Weekly update due</span>') + '</span></div>' +
+      (k.updatedThisWeek ? '<span class="badge ok">Updated in last ' + d.updatedWithinDays + ' days</span>' : '<span class="badge warn">Update due</span>') + '</span></div>' +
       info + '</section>' + forms +
       '<div class="section-h"><h2 class="h2">Recoveries – ' + esc(d.monthLabel) + '</h2></div><div class="card flush list timeline">' + recs + '</div>' +
       '<div class="section-h"><h2 class="h2">Weekly updates</h2></div><div class="card flush list timeline">' + ups + '</div></main>', keep === true);
   }
 
   function updateForm(d, last) {
-    var stepKnown = d.steps.indexOf(last.step) >= 0;
-    var stepSel = last.step ? (stepKnown ? last.step : 'Other') : '';
-    var otherText = last.step && !stepKnown ? last.step.replace(/^Other:\s*/, '') : '';
+    var stepSel = last.step || '';
+    var known = d.steps.indexOf(stepSel) >= 0;
+    var isOther = /^other/i.test(stepSel);
     return '<form class="card" data-submit="saveUpdate">' +
-      '<div class="card-h"><h2 class="h2">Weekly update</h2><span class="small">' + (last.at ? 'Last: ' + esc(last.at) : 'First update') + '</span></div>' +
+      '<div class="card-h"><h2 class="h2">Weekly update</h2><span class="small">' + (last.at ? 'Last: ' + esc(last.at) : 'First update this month') + '</span></div>' +
       '<div class="grid2"><div class="field"><label for="u-cash">Cash ledger balance (₹)</label><input id="u-cash" name="cashBal" class="input" inputmode="decimal" value="' + esc(last.cashBal === undefined ? '' : last.cashBal) + '"></div>' +
       '<div class="field"><label for="u-credit">Credit ledger balance (₹)</label><input id="u-credit" name="creditBal" class="input" inputmode="decimal" value="' + esc(last.creditBal === undefined ? '' : last.creditBal) + '"></div></div>' +
-      '<div class="field"><label for="u-spot">Spot visit date (if visited)</label><input id="u-spot" name="spotDate" class="input" type="date" max="' + d.today + '" value="' + esc(last.spotDate || '') + '"></div>' +
-      '<div class="field"><label for="u-step">Last recovery step taken</label><select id="u-step" name="step" class="input" data-change="stepSel" required><option value="">Select</option>' +
+      '<div class="field"><label for="u-spot">Spot visit date (leave empty if not visited)</label><input id="u-spot" name="spotDate" class="input" type="date" max="' + d.today + '" value="' + esc(last.spotDate || '') + '"></div>' +
+      '<div class="field"><label for="u-step">Last recovery step (' + (d.kase.status === 'Cancelled' ? 'Cancelled' : 'Active') + ' case)</label><select id="u-step" name="step" class="input" data-change="stepSel" required><option value="">Select</option>' +
+      (stepSel && !known ? '<option selected>' + esc(stepSel) + '</option>' : '') +
       d.steps.map(function (s) { return '<option' + (s === stepSel ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
-      '<div class="field' + (stepSel === 'Other' ? '' : ' hidden') + '" id="u-other-wrap"><label for="u-other">Describe the step</label><input id="u-other" name="stepOther" class="input" maxlength="180" value="' + esc(otherText) + '"></div>' +
       '<div class="field"><label for="u-sdate">Date of that step</label><input id="u-sdate" name="stepDate" class="input" type="date" max="' + d.today + '" value="' + esc(last.stepDate || '') + '" required></div>' +
-      '<div class="field"><label for="u-rem">Remark</label><textarea id="u-rem" name="remark" class="input" maxlength="500"></textarea></div>' +
-      '<button class="btn block" type="submit">Save weekly update</button></form>';
+      '<div class="field"><label for="u-rem">Remarks<span id="u-rem-req"' + (isOther ? '' : ' class="hidden"') + '> – required for "Other"</span></label><textarea id="u-rem" name="remark" class="input" maxlength="500"></textarea></div>' +
+      '<button class="btn block" type="submit">Save update</button></form>';
   }
 
   function recoveryForm(d) {
@@ -489,7 +497,7 @@
     render(bar({ title: '90+ Day Recovery', sub: 'Division dashboard · ' + s.monthLabel, back: '#/r90',
       right: '<button class="iconbtn" data-act="refreshDash" aria-label="Refresh">' + I.refresh + '</button>',
       seg: seg('dashTab', st.tab, TABS) }) + '<main>' +
-      figuresCard(TAB_LABEL[st.tab] + (st.unit === 'all' ? ' · Division' : ' · Unit ' + st.unit), t) +
+      figuresCard(TAB_LABEL[st.tab] + (st.unit === 'all' ? ' · Division' : ' · ' + unitName(Number(st.unit))), t) +
       '<div class="field"><span class="label-caps">Arrange by</span>' +
       chips('dashSort', st.sort, [['best', 'Best performing'], ['worst', 'Needs attention'], ['pending', 'Highest pending'], ['unit', 'By unit']]) + '</div>' +
       '<div class="field"><span class="label-caps">Unit</span>' +
@@ -556,7 +564,7 @@
       d.types.map(function (t) { return '<option value="' + esc(t.key) + '">' + esc(t.name) + '</option>'; }).join('') + '</select></div>' +
       '<div class="field"><label for="up-month">Month</label><select id="up-month" name="month" class="input">' + monthOptions(d.month) + '</select></div></div>' +
       '<div class="field"><label for="up-file">Excel or CSV file</label><input id="up-file" name="file" class="input" type="file" accept=".xlsx,.xls,.csv" required></div>' +
-      '<div class="hint">90+ list columns: Unit, STO, GSTIN, Trade name, Registration status, Pending amount (optional: Demand ref, Order date). Other columns are kept as they are.</div>' +
+      '<div class="hint">Use the same format as the 90+ pending list (sheet <b>Cases</b>): Case Type, Unit, STO, Demand ID, GSTIN, Legal Name, Pending Demand (Rs) … The columns STOs fill (ledger balances, spot visit, last step, recovered …) can stay empty.</div>' +
       '<div id="up-result"></div><button class="btn block" type="submit">Check and save</button></form>' +
 
       '<section class="card"><div class="card-h"><h2 class="h2">Drive Inbox</h2><span class="badge ' + (d.inboxCount ? 'warn' : 'grey') + '">' + d.inboxCount + ' file(s) waiting</span></div>' +
@@ -567,7 +575,8 @@
       '<section class="card"><div class="card-h"><h2 class="h2">Saved lists</h2>' +
       '<label class="sr" for="log-month">Month</label><select id="log-month" class="input" style="width:auto;min-height:40px" data-change="logMonth">' + monthOptions(viewMonth) + '</select></div>' + log +
       '<div class="row" style="flex-wrap:wrap">' + (d.folderUrl ? '<a class="linkbtn" href="' + esc(d.folderUrl) + '" target="_blank" rel="noopener">Drive folder (monthly lists)</a>' : '') +
-      (d.sheetUrl ? '<a class="linkbtn" href="' + esc(d.sheetUrl) + '" target="_blank" rel="noopener">Google Sheet (combined lists)</a>' : '') + '</div></section>' +
+      (d.sheetUrl ? '<a class="linkbtn" href="' + esc(d.sheetUrl) + '" target="_blank" rel="noopener">Google Sheet (combined lists)</a>' : '') + '</div>' +
+      '<button class="btn ghost small" data-act="exportR90" data-all="1">' + I.install + ' Download 90+ list with STO entries (all units)</button></section>' +
 
       '<section class="card flush"><div style="padding:16px 16px 4px"><h2 class="h2">Charges &amp; PINs</h2><div class="sub">New STO charges appear here automatically from the 90+ list.</div></div>' +
       '<div class="list">' + chargesHtml + '</div>' +
@@ -599,13 +608,83 @@
     });
   }
 
+  /* Reads the "Cases" sheet (or the first sheet) as rows of text. Dates become dd-mm-yyyy whatever
+     their display format; numbers are kept whole (no commas or 1.2E+07). */
   function readSheetFile(file) {
     return loadXlsx().then(function (XLSX) {
       return file.arrayBuffer().then(function (buf) {
-        var wb = XLSX.read(buf, { type: 'array', cellDates: true });
-        var ws = wb.Sheets[wb.SheetNames[0]];
-        return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'dd-mm-yyyy', defval: '', blankrows: false });
+        var wb = XLSX.read(buf, { type: 'array', cellDates: false, cellNF: true });
+        var name = wb.SheetNames.filter(function (n) { return /^cases$/i.test(n.trim()); })[0] || wb.SheetNames[0];
+        var ws = wb.Sheets[name];
+        if (!ws || !ws['!ref']) return [];
+        var rg = XLSX.utils.decode_range(ws['!ref']), rows = [];
+        for (var r = rg.s.r; r <= rg.e.r; r++) {
+          var row = [], any = false;
+          for (var c = rg.s.c; c <= rg.e.c; c++) {
+            var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })], v = '';
+            if (cell && cell.v !== undefined && cell.v !== null) {
+              if (cell.t === 'n' && cell.z && XLSX.SSF.is_date(cell.z)) {
+                var p = XLSX.SSF.parse_date_code(cell.v);
+                v = ('0' + p.d).slice(-2) + '-' + ('0' + p.m).slice(-2) + '-' + p.y;
+              } else if (cell.t === 'd' && cell.v instanceof Date) {
+                v = ('0' + cell.v.getDate()).slice(-2) + '-' + ('0' + (cell.v.getMonth() + 1)).slice(-2) + '-' + cell.v.getFullYear();
+              } else if (cell.t === 'n') {
+                v = String(Math.round(cell.v * 100) / 100);
+              } else if (cell.t === 'b') {
+                v = cell.v ? 'TRUE' : 'FALSE';
+              } else {
+                v = String(cell.w !== undefined && cell.t !== 's' ? cell.w : cell.v);
+              }
+            }
+            if (String(v).trim() !== '') any = true;
+            row.push(v);
+          }
+          if (any) rows.push(row);
+        }
+        return rows;
       });
+    });
+  }
+
+  /* Excel download in the list's own format: dates as real dates (dd-mm-yyyy), (Rs) columns as #,##0. */
+  function downloadExcel(d) {
+    return loadXlsx().then(function (XLSX) {
+      var head = d.rows[0];
+      var isDate = head.map(function (h) { return /date|updated on/i.test(h); });
+      var isMoney = head.map(function (h) { return /\((rs\.?|₹|inr)\)\s*$/i.test(h); });
+      var aoa = d.rows.map(function (row, ri) {
+        if (!ri) return row;
+        return row.map(function (v, ci) {
+          if (isDate[ci] && typeof v === 'string') {
+            var m = /^(\d{2})-(\d{2})-(\d{4})(?: (\d{2}):(\d{2}))?$/.exec(v);
+            if (m) return { serial: (Date.UTC(+m[3], +m[2] - 1, +m[1]) - Date.UTC(1899, 11, 30)) / 864e5 + ((+(m[4] || 0)) * 60 + (+(m[5] || 0))) / 1440 };
+          }
+          if (isMoney[ci] && typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v.replace(/,/g, '')))) return Number(v.replace(/,/g, ''));
+          return v;
+        });
+      });
+      var serials = {};
+      aoa = aoa.map(function (row, ri) {
+        return row.map(function (v, ci) {
+          if (v && typeof v === 'object' && 'serial' in v) { serials[ri + ',' + ci] = 1; return v.serial; }
+          return v;
+        });
+      });
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      var rg = XLSX.utils.decode_range(ws['!ref']);
+      for (var r = 1; r <= rg.e.r; r++) {
+        for (var c = 0; c <= rg.e.c; c++) {
+          var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+          if (!cell) continue;
+          if (serials[r + ',' + c]) cell.z = /updated on/i.test(head[c]) ? 'dd-mm-yyyy hh:mm' : 'dd-mm-yyyy';
+          else if (isMoney[c] && cell.t === 'n') cell.z = '#,##0';
+        }
+      }
+      ws['!cols'] = head.map(function (h) { return { wch: Math.min(40, Math.max(10, String(h).length + 2)) }; });
+      ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 0, c: rg.e.c } }) };
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, d.sheetName || 'Cases');
+      XLSX.writeFile(wb, d.fileName);
     });
   }
 
@@ -628,6 +707,12 @@
       if (n === 'adminUnit') { S.adminUnit = v; loadingView('90+ Day Recovery', '#/home'); getCases(true).then(drawR90).catch(function (e) { errorView('90+ Day Recovery', '#/home', e); }); }
     },
     refreshR90: function () { invalidate(); viewR90(); },
+    exportR90: function (b) {
+      busy(b, true, '');
+      api('r90.export', isAdmin() ? { unit: b.dataset.all ? '' : (S.adminUnit || '') } : {})
+        .then(function (d) { return downloadExcel(d).then(function () { busy(b, false); toast('Downloaded ' + (d.rows.length - 1) + ' cases.', true); }); })
+        .catch(function (e) { busy(b, false); toast(e.message); });
+    },
     refreshDash: function () { invalidate(); viewDash(); },
     refreshAdmin: function () { viewAdmin(); },
     caseForm: function (b) { S.caseForm = b.dataset.val; drawCase(true); },
@@ -662,7 +747,7 @@
 
   var CHANGE = {
     loginUnit: function (el) { document.getElementById('l-charge').innerHTML = chargeOptions(Number(el.value)); },
-    stepSel: function (el) { document.getElementById('u-other-wrap').classList.toggle('hidden', el.value !== 'Other'); },
+    stepSel: function (el) { var r = document.getElementById('u-rem-req'); if (r) r.classList.toggle('hidden', !/^other/i.test(el.value)); },
     logMonth: function (el) { S.adminMonth = el.value; api('admin.overview', { month: el.value }).then(function (d) { S.adminData = d; drawAdmin(true); }).catch(function (e) { toast(e.message); }); }
   };
 
@@ -703,7 +788,6 @@
     },
     saveUpdate: function (f, btn) {
       var v = formData(f);
-      if (v.step === 'Other') v.step = v.stepOther ? 'Other: ' + v.stepOther : 'Other';
       v.key = S.caseData.kase.key;
       busy(btn, true, 'Saving…');
       api('r90.saveUpdate', v).then(function (d) { S.caseData = d; invalidate(); drawCase(true); toast('Weekly update saved.', true); })
