@@ -3,5 +3,5 @@
  * Paste the Apps Script "Web app" URL (ends with /exec) between the quotes.
  */
 window.APP_CONFIG = {
-  API_URL: 'PASTE_YOUR_WEB_APP_URL_HERE'
+  API_URL: 'https://script.google.com/macros/s/AKfycbzMtgwcuCqTkVTlsi35huP6aQ6XpW3noUa8apcHHBnVe7q6z9uU20VqNYKHF5swakbM/exec'
 };
